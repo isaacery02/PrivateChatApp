@@ -42,6 +42,10 @@ let mediaRecorder  = null;
 let audioChunks    = [];
 let isRecording    = false;
 let recTimerRef    = null;
+let recAudioCtx    = null;
+let recAnalyser    = null;
+let recAnimFrame   = null;
+let recCancelled   = false;
 
 // DM sidebar
 const dmConversations = new Map(); // uid → { username, roomId }
@@ -1495,7 +1499,15 @@ async function startRecording() {
   } catch { /* permissions API not available — fall through to getUserMedia */ }
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: 48000,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      }
+    });
     // Pick the best supported format
     const formats = [
       "audio/webm;codecs=opus", "audio/webm",
@@ -1503,27 +1515,35 @@ async function startRecording() {
       "audio/mp4"
     ];
     const mimeType = formats.find(f => MediaRecorder.isTypeSupported(f)) || "";
-    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType, audioBitsPerSecond: 64000 } : { audioBitsPerSecond: 64000 });
     audioChunks   = [];
     mediaRecorder.addEventListener("dataavailable", e => { if (e.data.size) audioChunks.push(e.data); });
     mediaRecorder.addEventListener("stop", () => {
       stream.getTracks().forEach(t => t.stop());
-      const blob   = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
-      uploadVoiceMessage(blob);
+      if (!recCancelled) {
+        const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+        uploadVoiceMessage(blob);
+      }
+      recCancelled = false;
     });
     mediaRecorder.start();
     isRecording = true;
-    const btn = document.getElementById("mic-btn");
-    if (btn) {
-      btn.classList.add("recording");
-      btn.title = "Stop recording";
-      // Show elapsed time in the button
-      let secs = 0;
-      recTimerRef = setInterval(() => {
-        secs++;
-        btn.title = `Recording ${secs}s — click to send`;
-      }, 1000);
-    }
+
+    // Show recording bar, hide normal input controls
+    document.getElementById("recording-bar").classList.remove("hidden");
+    document.querySelector(".input-wrap").classList.add("hidden");
+    document.getElementById("send-btn").classList.add("hidden");
+
+    startWaveformViz(stream);
+
+    let secs = 0;
+    const timerEl = document.getElementById("rec-timer");
+    recTimerRef = setInterval(() => {
+      secs++;
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      if (timerEl) timerEl.textContent = `${m}:${String(s).padStart(2, "0")}`;
+    }, 1000);
   } catch (err) {
     appendSystemMessage("Microphone access denied or unavailable.");
     console.error(err);
@@ -1532,11 +1552,85 @@ async function startRecording() {
 
 function stopRecording() {
   if (!mediaRecorder || mediaRecorder.state === "inactive") return;
+  stopWaveformViz();
   mediaRecorder.stop();
   isRecording = false;
   clearInterval(recTimerRef);
-  const btn = document.getElementById("mic-btn");
-  if (btn) { btn.classList.remove("recording"); btn.title = "Record voice message"; }
+  const timerEl = document.getElementById("rec-timer");
+  if (timerEl) timerEl.textContent = "0:00";
+  document.getElementById("recording-bar").classList.add("hidden");
+  document.querySelector(".input-wrap").classList.remove("hidden");
+  document.getElementById("send-btn").classList.remove("hidden");
+}
+
+function cancelRecording() {
+  recCancelled = true;
+  stopRecording();
+}
+
+function startWaveformViz(stream) {
+  try {
+    recAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = recAudioCtx.createMediaStreamSource(stream);
+    recAnalyser  = recAudioCtx.createAnalyser();
+    recAnalyser.fftSize = 256;
+    recAnalyser.smoothingTimeConstant = 0.5;
+    source.connect(recAnalyser);
+  } catch { return; }
+
+  const canvas = document.getElementById("rec-waveform");
+  if (!canvas) return;
+  const ctx2d   = canvas.getContext("2d");
+  const bins    = new Uint8Array(recAnalyser.frequencyBinCount);
+  const history = new Array(50).fill(0);
+
+  function draw() {
+    recAnimFrame = requestAnimationFrame(draw);
+    recAnalyser.getByteFrequencyData(bins);
+
+    // RMS amplitude 0–1 across frequency bins
+    let sum = 0;
+    for (let i = 0; i < bins.length; i++) sum += bins[i] * bins[i];
+    history.push(Math.sqrt(sum / bins.length) / 255);
+    history.shift();
+
+    const W = canvas.offsetWidth || 200;
+    const H = canvas.offsetHeight || 36;
+    if (canvas.width !== W) canvas.width = W;
+    if (canvas.height !== H) canvas.height = H;
+
+    ctx2d.clearRect(0, 0, W, H);
+
+    const count = history.length;
+    const gap   = 3;
+    const barW  = Math.max(2, Math.floor((W - gap * (count - 1)) / count));
+    const midY  = H / 2;
+
+    for (let i = 0; i < count; i++) {
+      const amp   = history[i];
+      const barH  = Math.max(3, amp * H * 0.85);
+      const x     = i * (barW + gap);
+      const alpha = (0.3 + (i / count) * 0.7).toFixed(2);
+      ctx2d.fillStyle = `rgba(88,101,242,${alpha})`;
+      ctx2d.beginPath();
+      if (ctx2d.roundRect) {
+        ctx2d.roundRect(x, midY - barH / 2, barW, barH, 2);
+      } else {
+        ctx2d.rect(x, midY - barH / 2, barW, barH);
+      }
+      ctx2d.fill();
+    }
+  }
+
+  draw();
+}
+
+function stopWaveformViz() {
+  if (recAnimFrame) { cancelAnimationFrame(recAnimFrame); recAnimFrame = null; }
+  if (recAudioCtx)  { recAudioCtx.close().catch(() => {}); recAudioCtx = null; }
+  recAnalyser = null;
+  const canvas = document.getElementById("rec-waveform");
+  if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
 }
 
 async function uploadVoiceMessage(blob) {
