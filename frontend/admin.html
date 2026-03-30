@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin — ChatApp</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:         #1a1d21;
+      --bg-card:    #292b2f;
+      --bg-input:   #2f3136;
+      --bg-header:  #1f2124;
+      --accent:     #5865f2;
+      --accent-h:   #4752c4;
+      --danger:     #ed4245;
+      --danger-h:   #c03537;
+      --success:    #3ba55d;
+      --border:     #2e3035;
+      --text:       #dcddde;
+      --text-dim:   #8e9297;
+      --text-h:     #ffffff;
+      --radius:     8px;
+      --font:       'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Login Overlay ──────────────────────────────────────────────────────── */
+    .login-overlay {
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(145deg, #0c0d14 0%, #1a1d21 60%, #0f1117 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .login-card {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+    }
+    .login-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      justify-content: center;
+      margin-bottom: 6px;
+    }
+    .login-logo h1 { font-size: 1.6rem; font-weight: 700; color: var(--text-h); }
+    .login-subtitle {
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-bottom: 28px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .login-form { display: flex; flex-direction: column; gap: 12px; }
+    .login-form .form-field { display: flex; flex-direction: column; gap: 5px; }
+    .login-form .form-field label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .login-form input {
+      padding: 12px 16px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 0.9rem;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .login-form input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(88,101,242,0.18);
+    }
+
+    /* ── Shared Inputs & Buttons ────────────────────────────────────────────── */
+    .btn-primary {
+      padding: 11px 20px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn-primary:hover  { background: var(--accent-h); }
+    .btn-primary:active { transform: scale(0.98); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-danger {
+      padding: 6px 12px;
+      background: transparent;
+      border: 1px solid var(--danger);
+      color: var(--danger);
+      border-radius: 6px;
+      font-family: var(--font);
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.18s;
+    }
+    .btn-danger:hover { background: var(--danger); color: #fff; }
+
+    .btn-ghost {
+      padding: 8px 16px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.18s;
+    }
+    .btn-ghost:hover { border-color: var(--text-dim); color: var(--text); }
+
+    .error-msg  { color: var(--danger); font-size: 0.8rem; min-height: 18px; }
+    .success-msg { color: var(--success); font-size: 0.8rem; min-height: 18px; }
+
+    /* ── Admin Shell ────────────────────────────────────────────────────────── */
+    .admin-shell { min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* Header */
+    .admin-header {
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--border);
+      padding: 0 28px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .admin-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-h);
+    }
+    .admin-badge {
+      background: rgba(88,101,242,0.25);
+      color: var(--accent);
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .admin-meta {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+    #header-username { font-weight: 600; color: var(--text); }
+
+    /* Content */
+    .admin-content {
+      padding: 32px 28px;
+      max-width: 960px;
+      margin: 0 auto;
+      width: 100%;
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 24px;
+      align-items: start;
+    }
+    @media (max-width: 720px) {
+      .admin-content { grid-template-columns: 1fr; padding: 20px 16px; }
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    .card-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      margin-bottom: 18px;
+    }
+
+    /* Create user form */
+    .create-form { display: flex; flex-direction: column; gap: 11px; }
+    .create-form input {
+      padding: 10px 14px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 0.875rem;
+      transition: border-color 0.2s;
+    }
+    .create-form input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .create-form .btn-primary { margin-top: 4px; }
+
+    /* User table */
+    .user-table-wrap { overflow-x: auto; }
+    .user-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    .user-table th {
+      text-align: left;
+      padding: 9px 12px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+    }
+    .user-table td {
+      padding: 11px 12px;
+      border-bottom: 1px solid rgba(46,48,53,0.6);
+      vertical-align: middle;
+    }
+    .user-table tr:last-child td { border-bottom: none; }
+    .user-table tr:hover td { background: rgba(255,255,255,0.025); }
+    .user-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: #fff;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    .user-name { vertical-align: middle; font-weight: 500; }
+    .date-cell { color: var(--text-dim); font-size: 0.78rem; }
+    .empty-row td {
+      text-align: center;
+      color: var(--text-dim);
+      padding: 28px;
+      font-size: 0.875rem;
+    }
+    .table-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    #user-count {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      background: var(--bg-input);
+      padding: 3px 10px;
+      border-radius: 12px;
+    }
+
+    /* Utilities */
+    .hidden { display: none !important; }
+    .channel-badge {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .channel-badge.public  { background: rgba(59,165,93,0.18);  color: var(--success); }
+    .channel-badge.private { background: rgba(88,101,242,0.18); color: var(--accent); }
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+  <!-- ── Admin Login ──────────────────────────────────────────────────────── -->
+  <div id="login-overlay" class="login-overlay">
+    <div class="login-card">
+      <div class="login-logo">
+        <svg width="32" height="32" viewBox="0 0 36 36" fill="none">
+          <rect width="36" height="36" rx="10" fill="#5865f2"/>
+          <path d="M10 12h16M10 18h10M10 24h13" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        <h1>ChatApp</h1>
+      </div>
+      <p class="login-subtitle">Administrator Console</p>
+      <form class="login-form" id="admin-login-form" autocomplete="on">
+        <div class="form-field">
+          <label for="admin-user">Username</label>
+          <input type="text"     id="admin-user"  placeholder="Admin username" autocomplete="username" required />
+        </div>
+        <div class="form-field">
+          <label for="admin-pass">Password</label>
+          <input type="password" id="admin-pass"  placeholder="Admin password" autocomplete="current-password" required />
+        </div>
+        <button type="submit" class="btn-primary">Sign In</button>
+        <p id="login-error" class="error-msg" role="alert"></p>
+      </form>
+
+      <!-- TOTP second-factor step (shown when ADMIN_TOTP_SECRET is set) -->
+      <div id="totp-step" style="display:none">
+        <p style="color:var(--text-dim);font-size:0.88rem;margin:0 0 16px">
+          Enter the 6-digit code from your authenticator app.
+        </p>
+        <div class="form-field">
+          <label for="admin-totp-code">Authenticator Code</label>
+          <input type="text" id="admin-totp-code" inputmode="numeric" autocomplete="one-time-code"
+                 maxlength="6" placeholder="000000" style="letter-spacing:0.2em;font-size:1.2rem;text-align:center" />
+        </div>
+        <button class="btn-primary" id="totp-verify-btn" onclick="verifyAdminTotp()">Verify</button>
+        <p id="totp-error" class="error-msg" role="alert"></p>
+        <button type="button" class="btn-ghost"
+                style="width:100%;margin-top:10px;font-size:0.82rem;opacity:0.7"
+                onclick="backToLogin()">← Back to login</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Admin Shell ───────────────────────────────────────────────────────── -->
+  <div id="admin-shell" class="admin-shell hidden">
+
+    <header class="admin-header">
+      <div class="admin-brand">
+        <svg width="24" height="24" viewBox="0 0 36 36" fill="none">
+          <rect width="36" height="36" rx="8" fill="#5865f2"/>
+          <path d="M10 12h16M10 18h10M10 24h13" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        ChatApp
+        <span class="admin-badge">Admin</span>
+      </div>
+      <div class="admin-meta">
+        Signed in as <span id="header-username"></span>
+        <button class="btn-ghost" onclick="adminLogout()">Sign Out</button>
+      </div>
+    </header>
+
+    <main class="admin-content">
+
+      <!-- Create User Card -->
+      <div class="card">
+        <p class="card-title">Create New User</p>
+        <form class="create-form" id="create-user-form" autocomplete="off">
+          <input type="text" id="new-username" placeholder="Username (min 3 chars)"
+                 autocomplete="off" maxlength="50" required />
+          <input type="password" id="new-password" placeholder="Password (min 6 chars)"
+                 autocomplete="new-password" maxlength="100" required />
+          <button type="submit" class="btn-primary" id="create-btn">Create User</button>
+          <p id="create-error"   class="error-msg"   role="alert"></p>
+          <p id="create-success" class="success-msg" role="status"></p>
+        </form>
+      </div>
+
+      <!-- User List Card -->
+      <div class="card">
+        <div class="table-header-row">
+          <p class="card-title" style="margin:0">Registered Users</p>
+          <span id="user-count">— users</span>
+        </div>
+        <div class="user-table-wrap">
+          <table class="user-table" id="user-table">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Created</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="user-tbody">
+              <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Auto-Purge Settings Card -->
+      <div class="card">
+        <p class="card-title">Auto-Purge Settings</p>
+        <p class="card-hint">Permanently delete messages older than a set number of days. Runs hourly. <strong>Off by default.</strong></p>
+        <label class="settings-toggle">
+          <input type="checkbox" id="purge-enabled" />
+          <span>Enable auto-purge</span>
+        </label>
+        <div class="settings-row" id="purge-days-row">
+          <label class="settings-label">Delete messages older than</label>
+          <div class="settings-inline">
+            <input type="number" id="purge-days" min="1" max="3650" value="30" class="settings-number" />
+            <span class="settings-unit">days</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">History limit per channel</label>
+          <div class="settings-inline">
+            <input type="number" id="history-limit" min="10" max="200" value="50" class="settings-number" />
+            <span class="settings-unit">messages</span>
+          </div>
+        </div>
+        <button class="btn-primary" onclick="saveSettings()" id="settings-btn" style="margin-top:4px">Save Settings</button>
+        <p id="settings-status" class="success-msg" role="status"></p>
+        <p id="settings-error"  class="error-msg"   role="alert"></p>
+      </div>
+
+      <!-- Channel List Card -->
+      <div class="card">
+        <div class="table-header-row">
+          <p class="card-title" style="margin:0">Channels</p>
+          <span id="channel-count">— channels</span>
+        </div>
+        <div class="user-table-wrap">
+          <table class="user-table" id="channel-table">
+            <thead>
+              <tr>
+                <th>Channel</th>
+                <th>Type</th>
+                <th>Messages</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="channel-tbody">
+              <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Admin TOTP Setup Card -->
+      <div class="card">
+        <p class="card-title">Admin Two-Factor Authentication</p>
+        <p class="card-hint">
+          Generate a TOTP secret, scan it with an authenticator app (Google Authenticator, Authy, etc.),
+          then add <code style="font-family:monospace;opacity:0.85">ADMIN_TOTP_SECRET=&lt;secret&gt;</code>
+          to your <code style="font-family:monospace;opacity:0.85">.env</code> and rebuild the backend.
+          Admin login will then require a second-factor code.
+        </p>
+        <button class="btn-primary" id="totp-setup-btn" onclick="loadTotpSetupInfo()"
+                style="width:auto">Generate TOTP Secret</button>
+        <div id="totp-setup-result" style="display:none;margin-top:20px">
+          <div id="totp-qr-div" style="display:inline-block;padding:12px;background:#fff;border-radius:8px;margin-bottom:16px"></div>
+          <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+            <label class="settings-label">Secret — add to <code style="font-family:monospace">.env</code> as
+              <code style="font-family:monospace">ADMIN_TOTP_SECRET</code></label>
+            <div style="display:flex;gap:8px;width:100%;align-items:center">
+              <input type="text" id="totp-secret-display" readonly
+                     style="font-family:monospace;flex:1;font-size:0.9rem;background:var(--bg-secondary);
+                            border:1px solid rgba(255,255,255,0.1);color:var(--text);padding:8px 10px;border-radius:6px" />
+              <button class="btn-ghost" id="copy-secret-btn" onclick="copyTotpSecret()"
+                      style="white-space:nowrap">Copy</button>
+            </div>
+          </div>
+          <p class="card-hint" style="margin-top:12px;color:#e3a13f">
+            ⚠ After updating <code style="font-family:monospace">.env</code>, run:
+            <code style="font-family:monospace;display:block;margin-top:4px;padding:6px 8px;
+                         background:var(--bg-secondary);border-radius:4px">
+              docker compose up --build -d backend
+            </code>
+          </p>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script>
+    "use strict";
+
+    const API = "";          // same-origin via nginx proxy
+    let adminToken = localStorage.getItem("adminToken");
+    let adminName  = localStorage.getItem("adminName");
+    let adminTotpTempToken = null;   // holds the 5-min pending token during TOTP step
+
+    // ── Bootstrap ─────────────────────────────────────────────────────────────
+    document.addEventListener("DOMContentLoaded", () => {
+      if (adminToken) {
+        // Validate existing token against the API before showing the panel
+        apiFetch("/api/admin/users").then(r => {
+          if (r.ok) { showPanel(); } else { clearAdminAuth(); }
+        }).catch(() => clearAdminAuth());
+      }
+
+      document.getElementById("admin-login-form").addEventListener("submit", e => {
+        e.preventDefault();
+        doLogin();
+      });
+
+      document.getElementById("admin-totp-code").addEventListener("keydown", e => {
+        if (e.key === "Enter") { e.preventDefault(); verifyAdminTotp(); }
+      });
+
+      document.getElementById("create-user-form").addEventListener("submit", e => {
+        e.preventDefault();
+        createUser();
+      });
+
+      document.getElementById("purge-enabled").addEventListener("change", togglePurgeDaysRow);
+    });
+
+    // ── Login ──────────────────────────────────────────────────────────────────
+    async function doLogin() {
+      const username = document.getElementById("admin-user").value.trim();
+      const password = document.getElementById("admin-pass").value;
+      const errEl    = document.getElementById("login-error");
+      errEl.textContent = "";
+
+      try {
+        const res = await fetch(`${API}/api/admin/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password })
+        });
+
+        if (res.status === 401) { errEl.textContent = "Invalid credentials."; return; }
+        if (!res.ok)            { errEl.textContent = "Login failed."; return; }
+
+        const data = await res.json();
+
+        // TOTP is required — switch to the 2FA step
+        if (data.requiresTOTP) {
+          adminTotpTempToken = data.tempToken;
+          document.getElementById("admin-login-form").style.display = "none";
+          document.getElementById("totp-step").style.display = "";
+          document.getElementById("admin-totp-code").focus();
+          return;
+        }
+
+        adminToken = data.token;
+        adminName  = data.username;
+        localStorage.setItem("adminToken", adminToken);
+        localStorage.setItem("adminName",  adminName);
+        showPanel();
+      } catch {
+        errEl.textContent = "Cannot reach server.";
+      }
+    }
+
+    // ── TOTP second-factor verification ───────────────────────────────────────
+    async function verifyAdminTotp() {
+      const code  = document.getElementById("admin-totp-code").value.trim();
+      const errEl = document.getElementById("totp-error");
+      const btn   = document.getElementById("totp-verify-btn");
+      errEl.textContent = "";
+
+      if (!/^\d{6}$/.test(code)) { errEl.textContent = "Enter a 6-digit code."; return; }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Verifying…';
+      try {
+        const res = await fetch(`${API}/api/admin/verify-totp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tempToken: adminTotpTempToken, code })
+        });
+
+        if (res.status === 401) { errEl.textContent = "Invalid or expired code."; return; }
+        if (!res.ok)            { errEl.textContent = "Verification failed."; return; }
+
+        const data = await res.json();
+        adminToken = data.token;
+        adminName  = data.username;
+        localStorage.setItem("adminToken", adminToken);
+        localStorage.setItem("adminName",  adminName);
+        adminTotpTempToken = null;
+        document.getElementById("admin-totp-code").value = "";
+        showPanel();
+      } catch {
+        errEl.textContent = "Cannot reach server.";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Verify";
+      }
+    }
+
+    function backToLogin() {
+      adminTotpTempToken = null;
+      document.getElementById("admin-totp-code").value = "";
+      document.getElementById("totp-error").textContent = "";
+      document.getElementById("totp-step").style.display = "none";
+      document.getElementById("admin-login-form").style.display = "";
+    }
+
+    // ── Admin TOTP setup (generate secret + QR) ───────────────────────────────
+    async function loadTotpSetupInfo() {
+      const btn = document.getElementById("totp-setup-btn");
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Generating…';
+      try {
+        const res = await apiFetch("/api/admin/setup-totp");
+        if (!res.ok) { alert("Failed to generate TOTP secret."); return; }
+        const { secret, uri } = await res.json();
+
+        document.getElementById("totp-secret-display").value = secret;
+        document.getElementById("totp-setup-result").style.display = "";
+
+        // Render QR code using qrcodejs (loaded from cdnjs — already in CSP script-src)
+        loadQrScript(function () {
+          const qrDiv = document.getElementById("totp-qr-div");
+          qrDiv.innerHTML = "";
+          // eslint-disable-next-line no-undef
+          new QRCode(qrDiv, { text: uri, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.M });
+        });
+      } catch {
+        alert("Network error.");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Regenerate TOTP Secret";
+      }
+    }
+
+    function loadQrScript(callback) {
+      if (window.QRCode) { callback(); return; }
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
+      s.integrity = "sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSQX0FslNhTDadL4O5SAGapGt4FodqL8My0mA==";
+      s.crossOrigin = "anonymous";
+      s.onload = callback;
+      document.head.appendChild(s);
+    }
+
+    async function copyTotpSecret() {
+      const secret = document.getElementById("totp-secret-display").value;
+      try {
+        await navigator.clipboard.writeText(secret);
+        const btn = document.getElementById("copy-secret-btn");
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+      } catch {
+        alert("Copy failed — please select and copy the secret manually.");
+      }
+    }
+
+    // ── Panel ──────────────────────────────────────────────────────────────────
+    function showPanel() {
+      document.getElementById("login-overlay").classList.add("hidden");
+      document.getElementById("admin-shell").classList.remove("hidden");
+      document.getElementById("header-username").textContent = adminName;
+      loadUsers();
+      loadChannels();
+      loadSettings();
+    }
+
+    function clearAdminAuth() {
+      localStorage.removeItem("adminToken");
+      localStorage.removeItem("adminName");
+      adminToken = null;
+      adminName  = null;
+    }
+
+    function adminLogout() {
+      clearAdminAuth();
+      adminTotpTempToken = null;
+      document.getElementById("admin-shell").classList.add("hidden");
+      document.getElementById("login-overlay").classList.remove("hidden");
+      // Reset to login form in case the user was on the TOTP step
+      document.getElementById("totp-step").style.display = "none";
+      document.getElementById("admin-login-form").style.display = "";
+      document.getElementById("totp-error").textContent = "";
+      document.getElementById("admin-totp-code").value = "";
+      document.getElementById("user-tbody").innerHTML =
+        '<tr class="empty-row"><td colspan="3">Loading…</td></tr>';
+      document.getElementById("admin-user").value = "";
+      document.getElementById("admin-pass").value = "";
+    }
+
+    // ── Load Users ─────────────────────────────────────────────────────────────
+    async function loadUsers() {
+      const tbody = document.getElementById("user-tbody");
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr>';
+
+      try {
+        const res = await apiFetch("/api/admin/users");
+        if (!res.ok) { renderError(tbody, "Failed to load users."); return; }
+
+        const users = await res.json();
+        document.getElementById("user-count").textContent =
+          `${users.length} user${users.length !== 1 ? "s" : ""}`;
+
+        if (users.length === 0) {
+          tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No users yet — create one on the left.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = "";
+        users.forEach(u => {
+          const tr = document.createElement("tr");
+          const createdAt = u.createdAt
+            ? new Date(u.createdAt).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
+            : "—";
+          const initial = u.username ? u.username[0].toUpperCase() : "?";
+          const disabledLabel = u.disabled
+            ? '<span style="color:var(--danger);font-size:0.75rem;font-weight:600">⛔ Disabled</span>'
+            : '<span style="color:var(--success);font-size:0.75rem;font-weight:600">✓ Active</span>';
+          const toggleLabel = u.disabled ? 'Enable' : 'Disable';
+          tr.innerHTML = `
+            <td>
+              <span class="user-avatar">${escapeHtml(initial)}</span>
+              <span class="user-name">${escapeHtml(u.username)}</span>
+            </td>
+            <td class="date-cell">${escapeHtml(createdAt)}</td>
+            <td>${disabledLabel}</td>
+            <td style="display:flex;gap:6px">
+              <button class="btn-ghost" style="font-size:0.72rem;padding:5px 10px" onclick="toggleUserDisabled('${escapeHtml(u.id)}', ${!u.disabled})">
+                ${escapeHtml(toggleLabel)}
+              </button>
+              <button class="btn-danger" onclick="deleteUser('${escapeHtml(u.id)}','${escapeHtml(u.username)}')">
+                Delete
+              </button>
+            </td>`;
+          tbody.appendChild(tr);
+        });
+      } catch {
+        renderError(tbody, "Network error — cannot load users.");
+      }
+    }
+
+    async function toggleUserDisabled(id, disabled) {
+      try {
+        const res = await apiFetch(`/api/admin/users/${id}/disabled`, "PUT", { disabled });
+        if (!res.ok) { alert("Failed to update user."); return; }
+        await loadUsers();
+      } catch {
+        alert("Network error.");
+      }
+    }
+
+    function renderError(tbody, msg) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="4" style="color:var(--danger)">${escapeHtml(msg)}</td></tr>`;
+    }
+
+    // ── Create User ────────────────────────────────────────────────────────────
+    async function createUser() {
+      const username   = document.getElementById("new-username").value.trim();
+      const password   = document.getElementById("new-password").value;
+      const errEl      = document.getElementById("create-error");
+      const successEl  = document.getElementById("create-success");
+      const btn        = document.getElementById("create-btn");
+      errEl.textContent = "";
+      successEl.textContent = "";
+
+      if (username.length < 3) { errEl.textContent = "Username must be at least 3 characters."; return; }
+      if (password.length < 6) { errEl.textContent = "Password must be at least 6 characters."; return; }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Creating…';
+
+      try {
+        const res = await apiFetch("/api/admin/users", "POST", { username, password });
+        const body = await res.json().catch(() => ({}));
+
+        if (res.status === 409) { errEl.textContent = "Username already taken."; return; }
+        if (res.status === 400) { errEl.textContent = body.error ?? "Validation failed."; return; }
+        if (!res.ok)            { errEl.textContent = "Failed to create user."; return; }
+
+        successEl.textContent = `✓ User "${username}" created.`;
+        document.getElementById("new-username").value = "";
+        document.getElementById("new-password").value = "";
+        await loadUsers();
+      } catch {
+        errEl.textContent = "Network error.";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Create User";
+      }
+    }
+
+    // ── Delete User ────────────────────────────────────────────────────────────
+    async function deleteUser(id, username) {
+      if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+
+      try {
+        const res = await apiFetch(`/api/admin/users/${id}`, "DELETE");
+        if (res.status === 404) { alert("User not found — it may have already been deleted."); }
+        if (!res.ok && res.status !== 404) { alert("Failed to delete user."); return; }
+        await loadUsers();
+      } catch {
+        alert("Network error.");
+      }
+    }
+    // ── Load Channels ──────────────────────────────────────────────────────────
+    async function loadChannels() {
+      const tbody = document.getElementById("channel-tbody");
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr>';
+
+      try {
+        const res = await apiFetch("/api/admin/rooms");
+        if (!res.ok) { renderChannelError(tbody, "Failed to load channels."); return; }
+
+        const channels = await res.json();
+        document.getElementById("channel-count").textContent =
+          `${channels.length} channel${channels.length !== 1 ? "s" : ""}`;
+
+        if (channels.length === 0) {
+          tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No channels yet.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = "";
+        channels.forEach(ch => {
+          const tr = document.createElement("tr");
+          const badge = ch.isPrivate
+            ? `<span class="channel-badge private">Private</span>`
+            : `<span class="channel-badge public">Public</span>`;
+          tr.innerHTML = `
+            <td><span style="opacity:0.5;margin-right:4px">#</span>${escapeHtml(ch.name)}</td>
+            <td>${badge}</td>
+            <td style="color:var(--text-dim);font-size:0.82rem">${ch.messageCount.toLocaleString()}</td>
+            <td style="display:flex;gap:6px">
+              <button class="btn-ghost" style="font-size:0.72rem;padding:5px 10px" onclick="clearChannelMessages('${escapeHtml(ch.id)}','${escapeHtml(ch.name)}')">Clear Messages</button>
+              <button class="btn-danger" onclick="deleteChannel('${escapeHtml(ch.id)}','${escapeHtml(ch.name)}')">
+                Delete
+              </button>
+            </td>`;
+          tbody.appendChild(tr);
+        });
+      } catch {
+        renderChannelError(tbody, "Network error — cannot load channels.");
+      }
+    }
+
+    function renderChannelError(tbody, msg) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="4" style="color:var(--danger)">${escapeHtml(msg)}</td></tr>`;
+    }
+
+    // ── Clear Channel Messages ──────────────────────────────────────────────────
+    async function clearChannelMessages(id, name) {
+      if (!confirm(`Clear ALL messages in "#${name}"? The channel will remain but its entire history will be deleted. This cannot be undone.`)) return;
+
+      try {
+        const res = await apiFetch(`/api/admin/rooms/${id}/messages`, "DELETE");
+        if (res.status === 404) { alert("Channel not found."); return; }
+        if (!res.ok) { alert("Failed to clear messages."); return; }
+        await loadChannels();
+      } catch {
+        alert("Network error.");
+      }
+    }
+
+    // ── Delete Channel ─────────────────────────────────────────────────────────
+    async function deleteChannel(id, name) {
+      if (!confirm(`Delete channel "#${name}" and ALL its messages? This cannot be undone.`)) return;
+
+      try {
+        const res = await apiFetch(`/api/admin/rooms/${id}`, "DELETE");
+        if (res.status === 404) { alert("Channel not found — it may have already been deleted."); }
+        else if (!res.ok) { alert("Failed to delete channel."); return; }
+        await loadChannels();
+      } catch {
+        alert("Network error.");
+      }
+    }
+    // ── Settings ─────────────────────────────────────────────────────────────
+    async function loadSettings() {
+      try {
+        const res = await apiFetch("/api/admin/settings");
+        if (!res.ok) return;
+        const { purgeEnabled, purgeAfterDays, historyLimit } = await res.json();
+        document.getElementById("purge-enabled").checked = purgeEnabled;
+        document.getElementById("purge-days").value = purgeAfterDays;
+        document.getElementById("history-limit").value = historyLimit ?? 50;
+        togglePurgeDaysRow();
+      } catch { /* ignore */ }
+    }
+
+    function togglePurgeDaysRow() {
+      const enabled = document.getElementById("purge-enabled").checked;
+      document.getElementById("purge-days-row").style.opacity = enabled ? "1" : "0.4";
+    }
+
+    async function saveSettings() {
+      const purgeEnabled   = document.getElementById("purge-enabled").checked;
+      const purgeAfterDays = parseInt(document.getElementById("purge-days").value, 10);
+      const historyLimit   = parseInt(document.getElementById("history-limit").value, 10);
+      const statusEl = document.getElementById("settings-status");
+      const errorEl  = document.getElementById("settings-error");
+      const btn      = document.getElementById("settings-btn");
+      statusEl.textContent = "";
+      errorEl.textContent  = "";
+      if (!purgeAfterDays || purgeAfterDays < 1) { errorEl.textContent = "Days must be at least 1."; return; }
+      if (!historyLimit || historyLimit < 10 || historyLimit > 200) { errorEl.textContent = "History limit must be 10-200."; return; }
+      btn.disabled = true;
+      try {
+        const res  = await apiFetch("/api/admin/settings", "PUT", { purgeEnabled, purgeAfterDays, historyLimit });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) { errorEl.textContent = body.error ?? "Failed to save."; return; }
+        statusEl.textContent = "✓ Settings saved.";
+        setTimeout(() => { statusEl.textContent = ""; }, 3000);
+      } catch {
+        errorEl.textContent = "Network error.";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    // ── API Helper ─────────────────────────────────────────────────────────────
+    function apiFetch(url, method = "GET", body = null) {
+      const headers = { "Content-Type": "application/json" };
+      if (adminToken) headers["Authorization"] = `Bearer ${adminToken}`;
+      return fetch(`${API}${url}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined
+      });
+    }
+
+    // ── Security ───────────────────────────────────────────────────────────────
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+  </script>
+</body>
+</html>

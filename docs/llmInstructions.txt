@@ -1,0 +1,456 @@
+================================================================================
+  LLM SYSTEM INSTRUCTIONS — ChatApp (Rocket.Chat-style)
+  Self-hosted on Unraid via Docker Compose
+  Last updated: 2026-03-17
+================================================================================
+
+───────────────────────────────────────────────────────────────────────────────
+1. PROJECT OVERVIEW
+───────────────────────────────────────────────────────────────────────────────
+A real-time, multi-room chat application inspired by Rocket.Chat.
+Deployed as three Docker containers on an Unraid server.
+
+Deployment URL : http://192.168.1.50:8080  (also accessible via Cloudflare Tunnel)
+Repository root: dashboard-app/
+
+───────────────────────────────────────────────────────────────────────────────
+2. TECH STACK
+───────────────────────────────────────────────────────────────────────────────
+Layer        | Technology                          | Version / Notes
+-------------|-------------------------------------|-----------------------------
+Backend      | .NET Minimal API (C#)               | 8.0
+Realtime     | ASP.NET Core SignalR                | built into .NET 8
+Rate Limiting| ASP.NET Core RateLimiter            | built into .NET 8
+Database     | MongoDB                             | 8.2.5
+DB Driver    | MongoDB.Driver (NuGet)              | 3.2.0  ← includes GridFS
+File Storage | MongoDB GridFS                      | (inside MongoDB container)
+Auth         | JWT Bearer — Microsoft.AspNetCore
+             |   .Authentication.JwtBearer (NuGet) | 8.0.13
+Passwords    | BCrypt.Net-Next (NuGet)             | 4.0.3
+Frontend     | Static HTML / Vanilla JS / CSS      | no build step
+Web Server   | Nginx                               | 1.27-alpine
+Containers   | Docker Compose                      | v3.9
+
+NuGet packages (backend/ChatApp.csproj only three packages):
+  Microsoft.AspNetCore.Authentication.JwtBearer  8.0.13
+  MongoDB.Driver                                 3.2.0
+  BCrypt.Net-Next                                4.0.3
+
+Everything else (SignalR, Rate Limiter, Minimal API, JWT generation) is
+part of .NET 8 itself — no extra packages required.
+
+All Docker base images are Linux-only:
+  Backend build  : mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim
+  Backend runtime: mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim
+  Frontend       : nginx:1.27-alpine
+  Database       : mongo:8.2.5
+
+───────────────────────────────────────────────────────────────────────────────
+3. REPOSITORY STRUCTURE
+───────────────────────────────────────────────────────────────────────────────
+dashboard-app/
+├── .github/
+│   └── copilot-instructions.md  — auto-loads this file for GitHub Copilot
+├── docker-compose.yml           — Orchestrates mongodb / backend / frontend
+├── mongo-init.js                — One-time DB init: creates app_user + seeds rooms
+├── .env                         — Secrets (git-ignored, NEVER commit!)
+├── .gitignore                   — Excludes .env, bin/, obj/
+├── docs/
+│   └── llmInstructions.txt      — THIS FILE
+├── backend/
+│   ├── ChatApp.csproj
+│   ├── appsettings.json         — MongoDB, JWT, CORS config (no secrets)
+│   ├── Program.cs               — ALL Minimal API endpoints + service wiring
+│   ├── Dockerfile               — Multi-stage Linux build
+│   ├── Models/
+│   │   ├── User.cs              — Id, Username, DisplayName, PasswordHash,
+│   │   │                          AvatarColor, AvatarFileId, CreatedAt
+│   │   ├── Message.cs           — Id, RoomId, SenderId, SenderUsername,
+│   │   │                          SenderDisplayName, SenderAvatarColor,
+│   │   │                          SenderAvatarFileId, Content, Deleted,
+│   │   │                          EditedAt, Reactions, AttachmentId,
+│   │   │                          AttachmentName, AttachmentType, SentAt
+│   │   ├── ChatRoom.cs          — Id, Name, Description, IsPrivate,
+│   │   │                          MemberIds, CreatedAt
+│   │   └── Dtos.cs              — All request/response DTOs (see §7)
+│   ├── Repositories/            — Repository Pattern
+│   │   ├── IUserRepository.cs + UserRepository.cs         → [users]
+│   │   ├── IMessageRepository.cs + MessageRepository.cs   → [messages]
+│   │   └── IChatRoomRepository.cs + ChatRoomRepository.cs → [chat_rooms]
+│   ├── Hubs/
+│   │   └── ChatHub.cs           — SignalR hub (all real-time methods)
+│   └── Services/
+│       ├── AuthService.cs       — JWT token generation (user + admin roles)
+│       └── MongoDbSettings.cs   — Config POCO bound from appsettings.json
+└── frontend/
+    ├── index.html               — Chat SPA (login, modals, lightbox, context menu)
+    ├── app.js                   — All client logic (~784 lines, Vanilla JS)
+    ├── styles.css               — Dark-theme design system (CSS custom properties)
+    ├── admin.html               — Self-contained admin panel (no external JS)
+    ├── nginx.conf               — Reverse-proxy + 11 MB upload limit
+    └── Dockerfile               — nginx:1.27-alpine + static files
+
+───────────────────────────────────────────────────────────────────────────────
+4. MONGODB CONFIGURATION
+───────────────────────────────────────────────────────────────────────────────
+Host container name : mongodb          (Docker internal DNS)
+Port               : 27017
+Application DB     : chat_db
+Auth Source DB     : my_app_db
+App username       : app_user
+App password       : FutureGlow!@!
+
+CRITICAL: The password contains literal "@" characters.
+The backend MUST use MongoClientSettings + MongoCredential — NOT a connection
+string URL.  This must never be changed to a connection string.
+
+Collections:
+  users      — registered user accounts
+  messages   — all chat messages  (index: roomId + sentAt DESC)
+  chat_rooms — channel definitions (index: name UNIQUE)
+  fs.files / fs.chunks — GridFS buckets for images and avatars
+
+Seeded default rooms: #general, #random  (via mongo-init.js)
+
+GridFS buckets (stored inside the mongodb container, no extra storage needed):
+  Chat image uploads  → POST /api/rooms/{roomId}/upload  (≤10 MB)
+  User avatar uploads → POST /api/users/avatar           (≤2 MB)
+  Download endpoint   → GET  /api/files/{fileId}         (authenticated)
+
+───────────────────────────────────────────────────────────────────────────────
+5. AUTHENTICATION (JWT)
+───────────────────────────────────────────────────────────────────────────────
+Self-registration is PERMANENTLY DISABLED. Only admin creates accounts.
+
+Regular user login:
+  POST /api/auth/login  { username, password }
+  → { token, username, displayName, userId, avatarColor, avatarFileId }
+  Token role claim: "user"
+  Rate-limited: "login" policy (10 req/min)
+
+Admin login (admin.html only):
+  POST /api/admin/login  { username, password }
+  → { token, username }
+  Token role claim: "admin"
+  Rate-limited: "login" policy (10 req/min)
+
+Admin credential storage:
+  File  : .env  (git-ignored)
+  Keys  : ADMIN_USERNAME, ADMIN_PASSWORD
+  Backend hashes ADMIN_PASSWORD with BCrypt at startup.
+  Admin is NOT a MongoDB document; synthetic User object is used for token only.
+
+JWT settings (appsettings.json → "Jwt", override via env vars in prod):
+  Key        : Jwt__Key env var  (32+ char HMAC-SHA256 secret)
+  Issuer     : ChatApp
+  Audience   : ChatAppUsers
+  Expiry     : 24 hours
+
+Token transport:
+  REST      → Authorization: Bearer <token>
+  SignalR   → ?access_token=<token>  (query string, JwtBearerEvents.OnMessageReceived)
+
+Authorization policies:
+  (default)      — any valid JWT    → all /api/* except login; SignalR hub
+  "AdminPolicy"  — role == "admin"  → all /api/admin/* endpoints
+
+Password rules: username ≥ 3 chars, password ≥ 6 chars, BCrypt rounds = 11
+
+───────────────────────────────────────────────────────────────────────────────
+6. RATE LIMITING (.NET 8 AddRateLimiter)
+───────────────────────────────────────────────────────────────────────────────
+"login"    — FixedWindow: 10 requests per minute  → applied to both login endpoints
+"messages" — FixedWindow: 5 requests per second   → applied to /upload endpoint
+Rejection: HTTP 429 Too Many Requests
+
+───────────────────────────────────────────────────────────────────────────────
+7. MODELS AND DTOs
+───────────────────────────────────────────────────────────────────────────────
+DTOs (Dtos.cs — all records):
+  CreateUserRequest(Username, Password)
+  LoginRequest(Username, Password)
+  CreateRoomRequest(Name, Description, IsPrivate = false)
+  EditMessageRequest(Content)
+  InviteUserRequest(UserId)
+  ReactRequest(Emoji)
+  UpdateProfileRequest(DisplayName?, AvatarColor?)
+
+User.cs fields:
+  Id, Username, DisplayName, PasswordHash, AvatarColor (#5865f2 default),
+  AvatarFileId (GridFS ObjectId string, nullable), CreatedAt
+
+Message.cs fields:
+  Id, RoomId, SenderId, SenderUsername, SenderDisplayName, SenderAvatarColor,
+  SenderAvatarFileId, Content, Deleted (bool, soft-delete), EditedAt (DateTime?),
+  Reactions (Dictionary<string,List<string>>  emoji→userIds),
+  AttachmentId, AttachmentName, AttachmentType, SentAt
+
+ChatRoom.cs fields:
+  Id, Name, Description, IsPrivate (bool), MemberIds (List<string>), CreatedAt
+
+───────────────────────────────────────────────────────────────────────────────
+8. API ENDPOINTS
+───────────────────────────────────────────────────────────────────────────────
+Anonymous:
+  POST /api/auth/login               — user login  [rate: login]
+  POST /api/admin/login              — admin login [rate: login]
+
+Admin JWT required:
+  GET    /api/admin/users            — list users (id, username, displayName,
+                                       avatarColor, avatarFileId, createdAt)
+  POST   /api/admin/users            — create user { username, password }
+  DELETE /api/admin/users/{id}       — delete user
+
+Any valid JWT:
+  GET  /api/rooms                    — accessible rooms (public + user's private)
+  POST /api/rooms                    — create room { name, description, isPrivate }
+  POST /api/rooms/{id}/invite        — invite user to private channel { userId }
+                                       (caller must be a member or admin)
+
+  GET  /api/rooms/{id}/messages      — last 50 messages, oldest-first
+                                       (private channels: access guarded)
+  PUT  /api/rooms/{id}/messages/{msgId}   — edit message { content }
+                                           (own messages only; broadcasts MessageEdited)
+  DELETE /api/rooms/{id}/messages/{msgId} — soft-delete message
+                                           (own messages only; broadcasts MessageDeleted)
+  POST /api/rooms/{id}/messages/{msgId}/react  — toggle emoji { emoji }
+                                                 (broadcasts ReactionsUpdated)
+
+  POST /api/rooms/{id}/upload        — upload image to GridFS (multipart)
+                                       allowed: JPEG/PNG/GIF/WebP ≤10 MB
+                                       [rate: messages]
+  GET  /api/files/{fileId}           — download file from GridFS (as blob)
+
+  PATCH /api/users/me                — update own displayName / avatarColor
+  POST  /api/users/avatar            — upload own avatar (JPEG/PNG/WebP ≤2 MB)
+
+Anonymous:
+  GET  /health                       — { status, timestamp }
+
+───────────────────────────────────────────────────────────────────────────────
+9. SIGNALR HUB  (ChatHub.cs)
+───────────────────────────────────────────────────────────────────────────────
+URL: /chathub   — [Authorize] attribute (any valid JWT)
+
+Server methods (client invokes these):
+  JoinRoom(roomId)                   → joined group; broadcasts UserJoined
+  LeaveRoom(roomId)                  → left group;   broadcasts UserLeft
+  SendTyping(roomId)                 → broadcasts UserTyping to others in group
+  SendMessage(roomId, content)       → persists to MongoDB; broadcasts ReceiveMessage
+  EditMessage(roomId, msgId, text)   → updates MongoDB (own only); broadcasts MessageEdited
+  DeleteMessage(roomId, msgId)       → soft-deletes (own only); broadcasts MessageDeleted
+  ToggleReaction(roomId, msgId, emoji) → toggles reaction; broadcasts ReactionsUpdated
+
+Client events (server sends these):
+  OnlineUsers([{userId, username}])  → initial snapshot on connect
+  UserOnline(userId, username)       → presence: user connected
+  UserOffline(userId, username)      → presence: user has no more connections
+  UserJoined(username, roomId)
+  UserLeft(username, roomId)
+  UserTyping(username, roomId)
+  ReceiveMessage({ id, roomId, senderId, senderUsername, senderDisplayName,
+                   senderAvatarColor, senderAvatarFileId, content, deleted,
+                   editedAt, reactions, attachmentId, attachmentName,
+                   attachmentType, sentAt })
+  MessageEdited({ messageId, roomId, content, editedAt })
+  MessageDeleted({ messageId, roomId })
+  ReactionsUpdated({ messageId, roomId, reactions })
+
+Presence tracking:
+  Static ConcurrentDictionary<string,(string UserId, string Username)>
+  keyed by connectionId.  UserOffline only fires when the last connection
+  for a userId disconnects (multi-tab safe).
+
+───────────────────────────────────────────────────────────────────────────────
+10. REPOSITORY INTERFACES
+───────────────────────────────────────────────────────────────────────────────
+IUserRepository:
+  GetAllAsync() / GetByUsernameAsync(username) / GetByIdAsync(id)
+  CreateAsync(user) / DeleteAsync(id)
+  UpdateAvatarAsync(id, avatarFileId?)
+  UpdateProfileAsync(id, displayName?, avatarColor?)
+
+IMessageRepository:
+  GetByRoomAsync(roomId, limit=50) / GetByIdAsync(id)
+  CreateAsync(message)
+  EditAsync(id, senderId, newContent)       → returns bool (false if not owner)
+  SoftDeleteAsync(id, senderId)             → returns bool
+  ToggleReactionAsync(id, emoji, userId)    → returns bool
+
+IChatRoomRepository:
+  GetAllAsync() / GetByIdAsync(id) / GetByNameAsync(name) / CreateAsync(room)
+  GetAccessibleAsync(userId)                → public rooms + private rooms user belongs to
+  AddMemberAsync(roomId, userId)            → returns bool
+  RemoveMemberAsync(roomId, userId)         → returns bool
+
+───────────────────────────────────────────────────────────────────────────────
+11. CORS POLICY ("ChatPolicy")
+───────────────────────────────────────────────────────────────────────────────
+Allowed origins (appsettings.json → "Cors:AllowedOrigins"):
+  - http://192.168.1.50:8080
+  - https://your-cloudflare-domain.com     ← replace with actual domain
+
+AllowAnyHeader, AllowAnyMethod, AllowCredentials (required for SignalR)
+
+───────────────────────────────────────────────────────────────────────────────
+12. NETWORKING (Docker)
+───────────────────────────────────────────────────────────────────────────────
+All three containers share the bridge network: chat_net
+
+Service      | Internal DNS  | Exposed to host
+-------------|---------------|-------------------
+mongodb      | mongodb:27017 | No (internal only)
+backend      | backend:80    | No (nginx proxies)
+frontend     | frontend:80   | Yes → host:8080
+
+nginx reverse-proxy rules (frontend/nginx.conf):
+  /api/     → http://backend/api/
+  /chathub  → http://backend/chathub  (WebSocket upgrade)
+  /health   → http://backend/health
+  /*        → static files (index.html)
+  client_max_body_size: 11m
+
+MongoDB data persisted in Docker volume: mongo_data
+
+.env keys (all consumed by docker-compose.yml via env_file: - .env):
+  MONGO_ROOT_USERNAME   — MongoDB root user
+  MONGO_ROOT_PASSWORD   — MongoDB root password (passed as MONGO_INITDB_ROOT_*)
+  Jwt__Key              — JWT signing secret (overrides appsettings.json)
+  ADMIN_USERNAME        — Chat admin username
+  ADMIN_PASSWORD        — Chat admin password (BCrypt-hashed at backend startup)
+
+───────────────────────────────────────────────────────────────────────────────
+13. FRONTEND ARCHITECTURE
+───────────────────────────────────────────────────────────────────────────────
+No framework, no build step, no Node.js required.
+All JS is plain ES2020 Vanilla JavaScript loaded directly by nginx.
+
+── index.html ───────────────────────────────────────────────────────────────
+Single-page chat application. Modals:
+  Create Channel   — name, description, private checkbox
+  Invite User      — select user to add to private channel
+  Edit Message     — inline edit with Enter-to-save / Esc-to-cancel
+  Profile          — display name, avatar colour swatch, avatar image upload
+  Image Lightbox   — full-size view of any chat image (click to open/close)
+
+Right-click context menu on own messages:
+  ✏️ Edit  /  🗑 Delete
+
+── app.js  (key globals) ────────────────────────────────────────────────────
+  token, username, userId           — auth state, persisted in localStorage
+  userDisplayName, userAvatarColor  — persisted in localStorage
+  userAvatarFileId                  — GridFS ID of user's avatar, or null
+  connection                        — SignalR HubConnection
+  activeRoom                        — { id, name, description, isPrivate, memberIds }
+  joinedRooms                       — Set<roomId> of SignalR groups joined
+  onlineUsers                       — Map<userId, username>  (presence)
+  typingTimers                      — {username: timerHandle}  (typing indicator)
+  ctxMessageId / ctxRoomId          — context menu state
+  editMessageId / editRoomId        — edit modal state
+
+Key functions (app.js):
+  login() / storeAuth() / logout()
+  showApp()                  — loadRooms() + connectSignalR() in parallel
+  renderSelfAvatar()         — draws avatar in sidebar pill
+  renderAvatarInto(el, ...)  — renders initials or GridFS image into any element
+  showProfileModal() / saveProfile() / uploadAvatar()
+  loadRooms() / renderRooms() / switchRoom(room)
+  loadHistory(roomId)
+  showCreateRoom() / createRoom()
+  showInviteModal() / inviteUser()
+  connectSignalR()           — builds connection, registers ALL event handlers
+  setConnectionStatus(bool)
+  renderOnlineList()
+  broadcastTyping()          — throttled (2 s), invokes SendTyping
+  showTyping(username)       — shows indicator, auto-hides after 3 s
+  sendMessage()              — invokes SignalR SendMessage
+  showContextMenu() / contextEdit() / contextDelete()
+  showEditModal() / submitEdit()
+  renderReactions(div, reactions, msgId)
+  showReactionPicker(e, msgId)
+  uploadFile(file)           — multipart POST to /api/rooms/{id}/upload
+  loadImageSrc(fileId)       — fetches GridFS blob with Bearer token
+  showLightbox(src) / hideLightbox()
+  appendMessage(msg, scroll) — renders message div with avatar, reactions,
+                               attachment, context-menu handler
+  appendSystemMessage(text)
+  apiFetch(url, method, body, auth)    — authenticated fetch wrapper
+  escapeHtml(str)            — XSS sanitisation, applied to ALL user content
+
+── admin.html ───────────────────────────────────────────────────────────────
+Self-contained single file — no external JS (other than the fetch API).
+Uses sessionStorage key: adminToken (cleared on browser close).
+Operations: login, list users, create user, delete user.
+URL: http://192.168.1.50:8080/admin.html
+
+SignalR CDN (pinned, SRI hash):
+  https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js
+
+───────────────────────────────────────────────────────────────────────────────
+14. SECURITY NOTES
+───────────────────────────────────────────────────────────────────────────────
+- Self-registration permanently disabled; admin-only account creation
+- Admin credentials live only in .env and Docker env vars — never in MongoDB
+- Admin is NOT a MongoDB document; synthetic User object used for JWT only
+- All user-supplied content passes through escapeHtml() before DOM insertion
+- JWT Bearer validates issuer, audience, lifetime, and signing key
+- Rate limiting on login (brute-force protection) and upload endpoints
+- EditAsync / SoftDeleteAsync enforce senderId ownership — backend-side check
+  (not just frontend; cannot delete/edit another user's message even via direct API call)
+- Private channel history and membership guarded server-side (not just hidden in UI)
+- GridFS files served authenticated-only (GET /api/files/* requires valid JWT)
+- Backend runs as non-root Linux user (appuser:appgroup) inside the container
+- MongoDB is not exposed on the host; only on internal Docker network
+- Rotate secrets: edit .env, then `docker compose up -d backend`
+
+───────────────────────────────────────────────────────────────────────────────
+15. DEPLOYMENT
+───────────────────────────────────────────────────────────────────────────────
+First-time build and start:
+  cd dashboard-app
+  docker compose up --build -d
+
+Rebuild after code changes:
+  docker compose up --build -d backend   # backend only, faster
+  docker compose up --build -d           # full rebuild
+
+View logs:
+  docker compose logs -f
+  docker compose logs -f backend
+
+Stop:
+  docker compose down
+
+Reset database (WARNING — destroys all data including uploaded files):
+  docker compose down -v
+
+Local build verify (no Docker):
+  cd dashboard-app/backend
+  dotnet build -c Release
+
+───────────────────────────────────────────────────────────────────────────────
+16. CONVENTIONS FOR FUTURE LLM SESSIONS
+───────────────────────────────────────────────────────────────────────────────
+Code style:
+  - .NET 8 Minimal API only — no Controllers, no Startup.cs
+  - New collections → add Repository interface + impl, register AddSingleton in Program.cs
+  - New SignalR server events → add method to ChatHub.cs, handle in connectSignalR() in app.js
+  - New client-side state → declare at top of app.js beside other state globals
+  - Rate-limit sensitive new endpoints with .RequireRateLimiting(...)
+
+Immutable constraints:
+  - MongoDB: ALWAYS use MongoClientSettings + MongoCredential (password contains @)
+  - Docker base images: ALWAYS Linux-only (no windows/* images)
+  - Frontend: NO build pipeline — plain HTML/CSS/Vanilla JS only
+  - Self-registration: MUST remain disabled — user creation is admin-only
+  - Admin: NEVER stored in MongoDB; always synthetic User object for JWT
+  - GridFS: already integrated; use it for any binary/file storage
+  - All DOM output: MUST pass through escapeHtml() to prevent XSS
+  - Auth checks (edit/delete ownership, private room access): server-side only;
+    never rely on frontend-only guards
+
+Secret management:
+  - appsettings.json: non-secret defaults only
+  - Production secrets: Docker env vars from .env file
+  - GenerateToken(user, role): pass "user" for chat users, "admin" for admin
+================================================================================

@@ -1,0 +1,69 @@
+services:
+
+  # ── MongoDB 8.2.5 ───────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:8.2.5
+    container_name: chat_mongodb
+    restart: unless-stopped
+    env_file:
+      - .env                           # loads MONGO_ROOT_USERNAME, MONGO_ROOT_PASSWORD
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    volumes:
+      - /mnt/user/appdata/PrivateChat/mongodb:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - chat_net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── .NET 8 Backend ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chat_backend
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    env_file:
+      - .env                           # loads ADMIN_USERNAME, ADMIN_PASSWORD, Jwt__Key, MONGO_APP_PASSWORD
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:80
+      MongoDB__Password: ${MONGO_APP_PASSWORD}
+    networks:
+      - chat_net
+    # Backend is NOT exposed on the host — nginx proxies all traffic
+    expose:
+      - "80"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ── Nginx Frontend ───────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: chat_frontend
+    restart: unless-stopped
+    ports:
+      - "8182:80"
+    depends_on:
+      - backend
+    networks:
+      - chat_net
+
+volumes: {}
+
+networks:
+  chat_net:
+    driver: bridge
