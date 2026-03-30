@@ -1,5 +1,7 @@
-# Secret / credential files
+# Secret / credential files — NEVER commit these
 .env
+.env.local
+.env.*.local
 
 # .NET build output
 backend/bin/
@@ -8,6 +10,8 @@ backend/obj/
 # Docker volumes (if mounted locally)
 data/
 
-# OS
+# OS / editor
 .DS_Store
 Thumbs.db
+.vscode/settings.json
+*.user

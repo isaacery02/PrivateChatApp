@@ -16,3 +16,5 @@ public record ConfirmTotpRequest(string Code);
 public record DisableTotpRequest(string Password);
 public record SetupFirstTotpRequest(string TempToken);
 public record ConfirmFirstTotpRequest(string TempToken, string Code);
+public record PinMessageRequest(bool IsPinned);
+public record UpdateRoomRequest(string? Name, string? Description);

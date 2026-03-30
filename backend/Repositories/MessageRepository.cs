@@ -15,6 +15,18 @@ public class MessageRepository : IMessageRepository
             .Ascending(m => m.RoomId)
             .Descending(m => m.SentAt);
         _messages.Indexes.CreateOne(new CreateIndexModel<Message>(idx));
+        // Text index on Content for full-text search within rooms.
+        // Wrapped in try/catch: MongoDB allows only one text index per collection,
+        // so if a conflicting index exists from a prior deployment this won't crash
+        // the service — the old index will continue being used for searches.
+        try
+        {
+            var textIdx = Builders<Message>.IndexKeys
+                .Ascending(m => m.RoomId)
+                .Text(m => m.Content);
+            _messages.Indexes.CreateOne(new CreateIndexModel<Message>(textIdx));
+        }
+        catch (MongoCommandException) { /* index already exists with same or different definition */ }
     }
 
     public async Task<List<Message>> GetByRoomAsync(string roomId, int limit = 50, string? before = null)
@@ -109,5 +121,31 @@ public class MessageRepository : IMessageRepository
             Builders<Message>.Filter.Regex(m => m.RoomId, new MongoDB.Bson.BsonRegularExpression(userId))
         );
         return await _messages.Distinct<string>("roomId", filter).ToListAsync();
+    }
+
+    public async Task<List<Message>> SearchAsync(string roomId, string query, int limit = 20)
+    {
+        limit = Math.Clamp(limit, 1, 50);
+        var filter = Builders<Message>.Filter.And(
+            Builders<Message>.Filter.Text(query),
+            Builders<Message>.Filter.Eq(m => m.RoomId, roomId),
+            Builders<Message>.Filter.Eq(m => m.Deleted, false));
+        return await _messages
+            .Find(filter)
+            .SortByDescending(m => m.SentAt)
+            .Limit(limit)
+            .ToListAsync();
+    }
+
+    public Task<List<Message>> GetPinnedByRoomAsync(string roomId) =>
+        _messages.Find(m => m.RoomId == roomId && m.IsPinned && !m.Deleted)
+                 .SortBy(m => m.SentAt)
+                 .ToListAsync();
+
+    public async Task<bool> SetPinnedAsync(string id, bool isPinned)
+    {
+        var update = Builders<Message>.Update.Set(m => m.IsPinned, isPinned);
+        var result = await _messages.UpdateOneAsync(m => m.Id == id && !m.Deleted, update);
+        return result.ModifiedCount > 0;
     }
 }

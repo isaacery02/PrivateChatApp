@@ -937,9 +937,19 @@
       }
     }
     // ── API Helper ─────────────────────────────────────────────────────────────
+    function getCookie(name) {
+      const match = document.cookie.match(new RegExp("(^|;\\s*)" + name + "=([^;]*)"));
+      return match ? decodeURIComponent(match[2]) : null;
+    }
+
     function apiFetch(url, method = "GET", body = null) {
       const headers = { "Content-Type": "application/json" };
       if (adminToken) headers["Authorization"] = `Bearer ${adminToken}`;
+      // CSRF double-submit: required for all state-changing requests
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+        const csrf = getCookie("csrfToken");
+        if (csrf) headers["X-CSRF-Token"] = csrf;
+      }
       return fetch(`${API}${url}`, {
         method,
         headers,

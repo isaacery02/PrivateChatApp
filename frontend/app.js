@@ -75,10 +75,26 @@ function isTokenExpired(jwt) {
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   // JWT lives in an HttpOnly cookie now, so we can't inspect it from JS.
-  // If profile data is still in localStorage, attempt to restore the session.
-  // The first authenticated API call will validate the cookie; a 401 triggers logout.
+  // If profile data is in localStorage, call /api/auth/me to validate the cookie
+  // and get a fresh in-memory token (needed for SignalR accessTokenFactory).
   if (username && userId) {
-    showApp();
+    fetch(`${API_BASE}/api/auth/me`, { credentials: "same-origin" })
+      .then(r => {
+        if (!r.ok) {
+          // Cookie expired or invalid — clear stale localStorage and show login
+          localStorage.clear();
+          return;
+        }
+        return r.json().then(data => {
+          storeAuth(data);
+          showApp();
+        });
+      })
+      .catch(() => {
+        // Network error — try showing the app anyway; apiFetch 401-handler will
+        // force logout if the cookie is truly gone when the first request fires.
+        showApp();
+      });
   }
 
   initSwarm();
@@ -126,6 +142,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Reply bar cancel
   document.getElementById("reply-cancel-btn").addEventListener("click", clearReply);
+
+  // Search input (debounced)
+  document.getElementById("search-input").addEventListener("input", (e) => {
+    onSearchInput(e.target.value.trim());
+  });
 
   document.getElementById("new-room-name").addEventListener("keydown", (e) => {
     if (e.key === "Enter") createRoom();
@@ -610,14 +631,23 @@ async function switchRoom(room) {
   document.getElementById("room-description").textContent = room.description || "";
   document.getElementById("message-input").placeholder = `Message #${room.name}`;
 
-  const privateBadge = document.getElementById("room-private-badge");
-  const inviteBtn    = document.getElementById("invite-btn");
+  const privateBadge  = document.getElementById("room-private-badge");
+  const inviteBtn     = document.getElementById("invite-btn");
+  const membersBtn    = document.getElementById("members-btn");
+  const editRoomBtn   = document.getElementById("edit-room-btn");
+  const leaveRoomBtn  = document.getElementById("leave-room-btn");
   if (room.isPrivate) {
     privateBadge.classList.remove("hidden");
     inviteBtn.classList.remove("hidden");
+    membersBtn.classList.remove("hidden");
+    editRoomBtn.classList.remove("hidden");
+    leaveRoomBtn.classList.remove("hidden");
   } else {
     privateBadge.classList.add("hidden");
     inviteBtn.classList.add("hidden");
+    membersBtn.classList.add("hidden");
+    editRoomBtn.classList.add("hidden");
+    leaveRoomBtn.classList.add("hidden");
   }
 
   document.getElementById("no-room").classList.add("hidden");
@@ -625,10 +655,12 @@ async function switchRoom(room) {
   document.getElementById("messages").innerHTML = "";
   document.getElementById("typing-indicator").classList.add("hidden");
   clearReply();
+  hideSearch();
 
   closeSidebar();   // auto-close on mobile after selecting a room
 
   await loadHistory(room.id);
+  loadPinnedMessages(room.id);
 
   if (connection?.state === signalR.HubConnectionState.Connected) {
     if (!joinedRooms.has(room.id)) {
@@ -730,8 +762,10 @@ function prependMessage(msg) {
 
   const div = document.createElement("div");
   div.className = `message${isMine ? " mine" : ""}${isGrouped ? " grouped" : ""}`;
-  div.dataset.author = msg.senderId;
-  div.dataset.msgId  = msg.id;
+  div.dataset.author     = msg.senderId;
+  div.dataset.msgId      = msg.id;
+  div.dataset.pinned     = msg.isPinned ? "true" : "false";
+  div.dataset.senderName = displayName;
   if (msg.deleted) div.classList.add("deleted");
 
   const contentHtml = msg.deleted
@@ -1014,6 +1048,25 @@ async function connectSignalR() {
     if (roomId.startsWith("dm_")) return;
     if (roomId === activeRoom?.id)
       appendSystemMessage(`${uname} left #${activeRoom.name}`);
+  });
+
+  // Pin status changed for a message
+  connection.on("MessagePinned", ({ messageId, roomId, isPinned }) => {
+    const msgEl = document.querySelector(`[data-msg-id="${messageId}"]`);
+    if (msgEl) msgEl.dataset.pinned = isPinned ? "true" : "false";
+    if (activeRoom?.id === roomId) loadPinnedMessages(roomId);
+  });
+
+  // Room name or description was updated
+  connection.on("RoomUpdated", ({ roomId, name, description }) => {
+    const roomItem = document.querySelector(`.room-item[data-id="${CSS.escape(roomId)}"] .room-name`);
+    if (roomItem) roomItem.textContent = `#${name}`;
+    if (activeRoom?.id === roomId) {
+      activeRoom.name        = name        ?? activeRoom.name;
+      activeRoom.description = description ?? activeRoom.description;
+      document.getElementById("room-title").textContent       = activeRoom.name;
+      document.getElementById("room-description").textContent = activeRoom.description || "";
+    }
   });
 
   // DM invite: recipient is told to silently join the DM group
@@ -1523,6 +1576,20 @@ function showContextMenu(e, msgId, roomId, isMyMessage) {
   if (editBtn)   editBtn.style.display   = isMyMessage ? "" : "none";
   if (deleteBtn) deleteBtn.style.display = isMyMessage ? "" : "none";
 
+  // Pin button: visible in private rooms (for any member) — hidden in DMs and public rooms
+  const pinBtn = document.getElementById("ctx-pin-btn");
+  if (pinBtn) {
+    const canPin = activeRoom?.isPrivate && !activeRoom?.id?.startsWith("dm_");
+    if (canPin) {
+      const msgEl = document.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`);
+      const isPinned = msgEl?.dataset?.pinned === "true";
+      pinBtn.textContent = isPinned ? "📌 Unpin" : "📌 Pin";
+      pinBtn.classList.remove("hidden");
+    } else {
+      pinBtn.classList.add("hidden");
+    }
+  }
+
   menu.style.left = `${Math.min(e.clientX, window.innerWidth - 160)}px`;
   menu.style.top  = `${Math.min(e.clientY, window.innerHeight - 100)}px`;
   menu.classList.remove("hidden");
@@ -1536,11 +1603,12 @@ function hideContextMenu() {
 
 function contextEdit() {
   if (!ctxMessageId) return;
-  const div = document.querySelector(`[data-msg-id="${ctxMessageId}"]`);
+  const msgId = ctxMessageId;
+  const div = document.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`);
   const contentEl = div?.querySelector(".msg-content");
   const currentContent = contentEl?.dataset?.raw ?? contentEl?.textContent?.trim() ?? "";
   hideContextMenu();
-  showEditModal(ctxMessageId, activeRoom?.id, currentContent);
+  showEditModal(msgId, activeRoom?.id, currentContent);
 }
 
 function contextDelete() {
@@ -1553,11 +1621,26 @@ function contextDelete() {
 
 function contextReply() {
   if (!ctxMessageId) return;
-  const div = document.querySelector(`[data-msg-id="${ctxMessageId}"]`);
-  const senderName = div?.querySelector(".msg-author")?.textContent?.trim() || "User";
-  const content    = div?.querySelector(".msg-content")?.textContent?.trim() || "";
+  const msgId = ctxMessageId;
+  const div = document.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`);
+  // data-sender-name is set on all message divs (works for grouped messages too)
+  const senderName = div?.dataset?.senderName || "User";
+  // Use raw stored content so reply quote gets accurate unrendered text
+  const content = div?.querySelector(".msg-content")?.dataset?.raw
+    || div?.querySelector(".msg-content")?.textContent?.trim() || "";
   hideContextMenu();
-  setReplyTo(ctxMessageId, senderName, content);
+  setReplyTo(msgId, senderName, content);
+}
+
+async function contextPin() {
+  if (!ctxMessageId || !ctxRoomId) return;
+  const msgId = ctxMessageId, roomId = ctxRoomId;
+  const msgEl  = document.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`);
+  const currentlyPinned = msgEl?.dataset?.pinned === "true";
+  hideContextMenu();
+  const res = await apiFetch(`/api/rooms/${roomId}/messages/${msgId}/pin`, "PUT",
+    { isPinned: !currentlyPinned });
+  if (!res.ok) { console.error("Pin failed", await res.text()); }
 }
 
 // ── Edit Modal ────────────────────────────────────────────────────────────────
@@ -1579,8 +1662,25 @@ function hideEditModal() {
 async function submitEdit() {
   const content = document.getElementById("edit-content").value.trim();
   if (!content || !editMessageId || !editRoomId) return;
+  // Capture before hideEditModal clears them
+  const msgId = editMessageId;
   try {
-    await connection.invoke("EditMessage", editRoomId, editMessageId, content);
+    await connection.invoke("EditMessage", editRoomId, msgId, content);
+    // Apply DOM update immediately rather than waiting for the SignalR echo
+    const div = document.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`);
+    if (div) {
+      const contentEl = div.querySelector(".msg-content");
+      if (contentEl) {
+        contentEl.innerHTML = renderMarkdown(content);
+        contentEl.dataset.raw = content;
+      }
+      if (!div.querySelector(".msg-edited")) {
+        const mark = document.createElement("span");
+        mark.className = "msg-edited";
+        mark.textContent = " (edited)";
+        div.querySelector(".msg-meta")?.appendChild(mark);
+      }
+    }
     hideEditModal();
   } catch (err) { console.error("Edit failed:", err); }
 }
@@ -1717,8 +1817,10 @@ function appendMessage(msg, scrollIntoView = false) {
 
   const div = document.createElement("div");
   div.className = `message${isMine ? " mine" : ""}${isGrouped ? " grouped" : ""}`;
-  div.dataset.author = msg.senderId;
-  div.dataset.msgId  = msg.id;
+  div.dataset.author     = msg.senderId;
+  div.dataset.msgId      = msg.id;
+  div.dataset.pinned     = msg.isPinned ? "true" : "false";
+  div.dataset.senderName = displayName;
   if (msg.deleted) div.classList.add("deleted");
 
   const contentHtml = msg.deleted
@@ -2155,6 +2257,201 @@ function urlBase64ToUint8Array(base64String) {
   const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
   const raw     = atob(base64);
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+// ── Message Search ────────────────────────────────────────────────────────────
+let _searchDebounceTimer = null;
+
+function toggleSearch() {
+  const panel = document.getElementById("search-panel");
+  if (panel.classList.contains("hidden")) {
+    panel.classList.remove("hidden");
+    document.getElementById("search-input").focus();
+  } else {
+    hideSearch();
+  }
+}
+
+function hideSearch() {
+  const panel = document.getElementById("search-panel");
+  if (panel) panel.classList.add("hidden");
+  const input = document.getElementById("search-input");
+  if (input) input.value = "";
+  const results = document.getElementById("search-results");
+  if (results) results.innerHTML = "";
+}
+
+function onSearchInput(value) {
+  clearTimeout(_searchDebounceTimer);
+  if (value.length < 2) {
+    document.getElementById("search-results").innerHTML = "";
+    return;
+  }
+  _searchDebounceTimer = setTimeout(() => searchMessages(value), 400);
+}
+
+async function searchMessages(q) {
+  if (!activeRoom?.id) return;
+  const res = await apiFetch(`/api/rooms/${activeRoom.id}/messages/search?q=${encodeURIComponent(q)}&limit=20`);
+  if (!res.ok) return;
+  const msgs = await res.json();
+  renderSearchResults(msgs);
+}
+
+function renderSearchResults(msgs) {
+  const container = document.getElementById("search-results");
+  if (!container) return;
+  if (!msgs.length) {
+    container.innerHTML = '<p class="search-no-results">No results found.</p>';
+    return;
+  }
+  container.innerHTML = "";
+  msgs.forEach(msg => {
+    const item = document.createElement("div");
+    item.className = "search-result-item";
+    const time = new Date(msg.sentAt).toLocaleDateString([], { month: "short", day: "numeric" });
+    const snippet = (msg.content || "").slice(0, 120);
+    item.innerHTML =
+      `<span class="search-result-author">${escapeHtml(msg.senderDisplayName || msg.senderUsername)}</span>` +
+      `<span class="search-result-time"> · ${time}</span><br>` +
+      `<span class="search-result-snippet">${escapeHtml(snippet)}</span>`;
+    item.addEventListener("click", () => {
+      hideSearch();
+      const target = document.querySelector(`[data-msg-id="${CSS.escape(msg.id)}"]`);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.classList.add("msg-highlight");
+        setTimeout(() => target.classList.remove("msg-highlight"), 2000);
+      }
+    });
+    container.appendChild(item);
+  });
+}
+
+// ── Pinned Messages Bar ───────────────────────────────────────────────────────
+async function loadPinnedMessages(roomId) {
+  if (!roomId || roomId.startsWith("dm_")) {
+    renderPinnedBar([]);
+    return;
+  }
+  try {
+    const res = await apiFetch(`/api/rooms/${roomId}/pinned`);
+    if (!res.ok) { renderPinnedBar([]); return; }
+    renderPinnedBar(await res.json());
+  } catch { renderPinnedBar([]); }
+}
+
+function renderPinnedBar(messages) {
+  const bar     = document.getElementById("pinned-bar");
+  const list    = document.getElementById("pinned-list");
+  const count   = document.getElementById("pinned-count");
+  const preview = document.getElementById("pinned-preview-text");
+  if (!bar || !list) return;
+  if (!messages.length) { bar.classList.add("hidden"); return; }
+
+  bar.classList.remove("hidden");
+  count.textContent   = messages.length;
+  preview.textContent = (messages[0].content || "").slice(0, 60);
+
+  list.innerHTML = "";
+  messages.forEach(msg => {
+    const li = document.createElement("li");
+    li.className = "pinned-item";
+    const time = new Date(msg.sentAt).toLocaleDateString([], { month: "short", day: "numeric" });
+    li.innerHTML =
+      `<div class="pinned-item-meta">${escapeHtml(msg.senderDisplayName || msg.senderUsername)} · ${time}</div>` +
+      `<div class="pinned-item-content">${escapeHtml((msg.content || "").slice(0, 200))}</div>`;
+    list.appendChild(li);
+  });
+}
+
+function togglePinnedList() {
+  const list    = document.getElementById("pinned-list");
+  const chevron = document.getElementById("pinned-chevron");
+  const header  = document.querySelector(".pinned-bar-header");
+  if (!list) return;
+  const isHidden = list.classList.toggle("hidden");
+  if (chevron) chevron.textContent = isHidden ? "▾" : "▴";
+  if (header)  header.setAttribute("aria-expanded", String(!isHidden));
+}
+
+// ── Room Management ───────────────────────────────────────────────────────────
+function showEditRoomModal() {
+  if (!activeRoom) return;
+  document.getElementById("edit-room-name").value = activeRoom.name || "";
+  document.getElementById("edit-room-desc").value = activeRoom.description || "";
+  const errEl = document.getElementById("edit-room-error");
+  if (errEl) { errEl.style.display = "none"; errEl.textContent = ""; }
+  document.getElementById("edit-room-modal").classList.remove("hidden");
+}
+
+function hideEditRoomModal() {
+  document.getElementById("edit-room-modal").classList.add("hidden");
+}
+
+async function saveEditRoom() {
+  if (!activeRoom) return;
+  const name = document.getElementById("edit-room-name").value.trim();
+  const desc = document.getElementById("edit-room-desc").value.trim();
+  const errEl = document.getElementById("edit-room-error");
+  if (errEl) { errEl.style.display = "none"; errEl.textContent = ""; }
+  const res = await apiFetch(`/api/rooms/${activeRoom.id}`, "PUT", { name: name || null, description: desc || null });
+  if (res.status === 409) {
+    if (errEl) { errEl.textContent = "Channel name already exists."; errEl.style.display = ""; }
+    return;
+  }
+  if (!res.ok) {
+    if (errEl) { errEl.textContent = "Failed to update channel."; errEl.style.display = ""; }
+    return;
+  }
+  hideEditRoomModal();
+}
+
+async function leaveRoom() {
+  if (!activeRoom?.isPrivate) return;
+  if (!confirm(`Leave #${activeRoom.name}?`)) return;
+  const roomId = activeRoom.id;
+  const res = await apiFetch(`/api/rooms/${roomId}/members/me`, "DELETE");
+  if (!res.ok) { alert("Could not leave the channel."); return; }
+  activeRoom = null;
+  // Remove from room list in sidebar
+  const el = document.querySelector(`.room-item[data-id="${CSS.escape(roomId)}"]`);
+  if (el) el.remove();
+  // Switch to first available room
+  const first = document.querySelector(".room-item");
+  if (first) first.click(); else {
+    document.getElementById("chat-panel").classList.add("hidden");
+    document.getElementById("no-room").classList.remove("hidden");
+  }
+}
+
+async function showMembersModal() {
+  if (!activeRoom) return;
+  const res = await apiFetch(`/api/rooms/${activeRoom.id}/members`);
+  if (!res.ok) return;
+  const members = await res.json();
+  const list = document.getElementById("members-list");
+  list.innerHTML = "";
+  members.forEach(member => {
+    const li = document.createElement("li");
+    li.className = "member-row";
+    const avatarEl = document.createElement("div");
+    avatarEl.className = "avatar-mini member-row-avatar";
+    renderAvatarInto(avatarEl, member.displayName || member.username,
+      member.avatarColor, member.avatarFileId);
+    const nameDiv = document.createElement("div");
+    nameDiv.innerHTML =
+      `<div class="member-row-name">${escapeHtml(member.displayName || member.username)}</div>` +
+      `<div class="member-row-username">@${escapeHtml(member.username)}</div>`;
+    li.appendChild(avatarEl);
+    li.appendChild(nameDiv);
+    list.appendChild(li);
+  });
+  document.getElementById("members-modal").classList.remove("hidden");
+}
+
+function hideMembersModal() {
+  document.getElementById("members-modal").classList.add("hidden");
 }
 
 // ── Swarm Background Animation (login page) ─────────────────────────────────

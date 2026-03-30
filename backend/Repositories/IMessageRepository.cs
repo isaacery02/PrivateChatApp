@@ -14,4 +14,7 @@ public interface IMessageRepository
     Task<long> DeleteOlderThanAsync(DateTime cutoff);
     Task<long> DeleteByRoomAsync(string roomId);
     Task<List<string>> GetDmRoomsForUserAsync(string userId);
+    Task<List<Message>> SearchAsync(string roomId, string query, int limit = 20);
+    Task<List<Message>> GetPinnedByRoomAsync(string roomId);
+    Task<bool> SetPinnedAsync(string id, bool isPinned);
 }

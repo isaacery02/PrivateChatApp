@@ -53,4 +53,7 @@ public class Message
 
     [BsonElement("sentAt")]
     public DateTime SentAt { get; set; } = DateTime.UtcNow;
+
+    [BsonElement("isPinned")]
+    public bool IsPinned { get; set; } = false;
 }

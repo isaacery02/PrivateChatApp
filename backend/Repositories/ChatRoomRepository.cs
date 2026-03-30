@@ -49,4 +49,15 @@ public class ChatRoomRepository : IChatRoomRepository
 
     public Task DeleteAsync(string id) =>
         _rooms.DeleteOneAsync(r => r.Id == id);
+
+    public async Task<bool> UpdateAsync(string id, string? name, string? description)
+    {
+        var updates = new List<UpdateDefinition<ChatRoom>>();
+        if (name        != null) updates.Add(Builders<ChatRoom>.Update.Set(r => r.Name,        name));
+        if (description != null) updates.Add(Builders<ChatRoom>.Update.Set(r => r.Description, description));
+        if (updates.Count == 0) return false;
+        var combined = Builders<ChatRoom>.Update.Combine(updates);
+        var result = await _rooms.UpdateOneAsync(r => r.Id == id, combined);
+        return result.ModifiedCount > 0;
+    }
 }

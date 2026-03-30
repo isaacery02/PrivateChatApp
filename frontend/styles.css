@@ -1298,6 +1298,113 @@ body {
 
 .btn-burger-empty { display: none; }    /* shown only on mobile */
 
+/* ── Message Search Panel ────────────────────────────────────────────────── */
+.search-panel {
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 16px 10px;
+}
+.search-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.search-input-row input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.875rem;
+  padding: 5px 10px;
+  outline: none;
+}
+.search-input-row input:focus { border-color: var(--accent); }
+.search-results {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.search-result-item {
+  padding: 7px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.search-result-item:hover { background: var(--bg-hover); }
+.search-result-author { color: var(--accent); font-weight: 600; }
+.search-result-time   { color: var(--text-muted); font-size: 0.78rem; }
+.search-result-snippet { color: var(--text-secondary); }
+.search-no-results { color: var(--text-muted); text-align: center; padding: 12px 0; font-size: 0.875rem; }
+
+@keyframes msgHighlight {
+  0%   { background: rgba(88, 101, 242, 0.25); }
+  100% { background: transparent; }
+}
+.msg-highlight { animation: msgHighlight 2s ease-out; }
+
+/* ── Pinned Messages Bar ─────────────────────────────────────────────────── */
+.pinned-bar {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.pinned-bar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.pinned-bar-header:hover { background: var(--bg-hover); }
+.pinned-preview-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.pinned-chevron { color: var(--text-muted); font-size: 0.75rem; }
+.pinned-list {
+  border-top: 1px solid var(--border);
+  max-height: 200px;
+  overflow-y: auto;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.pinned-item {
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.4;
+}
+.pinned-item:last-child { border-bottom: none; }
+.pinned-item-meta { color: var(--text-muted); font-size: 0.75rem; margin-bottom: 2px; }
+.pinned-item-content { color: var(--text-secondary); }
+
+/* ── Members Modal List ──────────────────────────────────────────────────── */
+.members-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.member-row:last-child { border-bottom: none; }
+.member-row-avatar { width: 32px; height: 32px; flex-shrink: 0; }
+.member-row-name { font-weight: 600; color: var(--text-primary); font-size: 0.9rem; }
+.member-row-username { font-size: 0.78rem; color: var(--text-muted); }
+
 @media (max-width: 700px) {
   /* Sidebar slides in from left as overlay */
   .sidebar {

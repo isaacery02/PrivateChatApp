@@ -13,4 +13,5 @@ public interface IChatRoomRepository
     Task<bool> AddMemberAsync(string roomId, string userId);
     Task<bool> RemoveMemberAsync(string roomId, string userId);
     Task DeleteAsync(string id);
+    Task<bool> UpdateAsync(string id, string? name, string? description);
 }

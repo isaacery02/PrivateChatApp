@@ -10,7 +10,7 @@
 A real-time, multi-room chat application inspired by Rocket.Chat.
 Deployed as three Docker containers on an Unraid server.
 
-Deployment URL : http://192.168.1.50:8080  (also accessible via Cloudflare Tunnel)
+Deployment URL : http://<YOUR_SERVER_IP>:<PORT>  (also accessible via Cloudflare Tunnel)
 Repository root: dashboard-app/
 
 ───────────────────────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ Port               : 27017
 Application DB     : chat_db
 Auth Source DB     : my_app_db
 App username       : app_user
-App password       : FutureGlow!@!
+App password       : <set MONGO_APP_PASSWORD in .env — never commit the real value>
 
 CRITICAL: The password contains literal "@" characters.
 The backend MUST use MongoClientSettings + MongoCredential — NOT a connection
@@ -287,8 +287,8 @@ IChatRoomRepository:
 11. CORS POLICY ("ChatPolicy")
 ───────────────────────────────────────────────────────────────────────────────
 Allowed origins (appsettings.json → "Cors:AllowedOrigins"):
-  - http://192.168.1.50:8080
-  - https://your-cloudflare-domain.com     ← replace with actual domain
+  - http://localhost:<PORT>                ← dev / LAN address
+  - https://your-domain.com               ← production domain
 
 AllowAnyHeader, AllowAnyMethod, AllowCredentials (required for SignalR)
 
@@ -381,7 +381,7 @@ Key functions (app.js):
 Self-contained single file — no external JS (other than the fetch API).
 Uses sessionStorage key: adminToken (cleared on browser close).
 Operations: login, list users, create user, delete user.
-URL: http://192.168.1.50:8080/admin.html
+URL: http://<YOUR_SERVER_IP>:<PORT>/admin.html
 
 SignalR CDN (pinned, SRI hash):
   https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js

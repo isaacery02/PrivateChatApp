@@ -278,6 +278,32 @@ app.MapPost("/api/auth/logout", (HttpContext ctx) =>
     return Results.NoContent();
 });
 
+// ── Session restore: return a fresh token + profile from the existing cookie ──
+// Called on page load when localStorage has profile data but token is not in memory.
+// Returns a refreshed JWT so SignalR accessTokenFactory has a valid in-memory token.
+app.MapGet("/api/auth/me", async (
+    ClaimsPrincipal principal, IUserRepository users, AuthService auth, HttpContext ctx) =>
+{
+    var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
+    var user   = await users.GetByIdAsync(userId);
+    if (user is null) return Results.Unauthorized();
+    if (user.Disabled) return Results.Json(new { error = "Account is disabled." }, statusCode: 403);
+
+    // Issue a fresh JWT + refresh the cookies so the session clock resets
+    var jwt = auth.GenerateToken(user, "user");
+    SetAuthCookies(ctx, jwt);
+    return Results.Ok(new
+    {
+        token       = jwt,
+        userId      = user.Id,
+        username    = user.Username,
+        displayName = user.DisplayName ?? user.Username,
+        avatarColor = user.AvatarColor ?? "#5865f2",
+        avatarFileId = user.AvatarFileId,
+        totpEnabled = user.TotpEnabled
+    });
+}).RequireAuthorization();
+
 app.MapPost("/api/auth/login", async (
     LoginRequest req, IUserRepository users, AuthService auth, IConfiguration config) =>
 {
@@ -836,6 +862,83 @@ app.MapPost("/api/rooms/{roomId}/invite", async (
     return Results.Ok(new { message = "User invited." });
 }).RequireAuthorization();
 
+// Edit a room's name and/or description (admin or private-room member)
+app.MapPut("/api/rooms/{id}", async (
+    string id,
+    UpdateRoomRequest req,
+    IChatRoomRepository rooms,
+    IHubContext<ChatHub> hubCtx,
+    ClaimsPrincipal principal) =>
+{
+    var room = await rooms.GetByIdAsync(id);
+    if (room is null) return Results.NotFound(new { error = "Room not found." });
+
+    var callerId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
+    var role     = principal.FindFirstValue(ClaimTypes.Role);
+    if (role != "admin" && !(room.IsPrivate && room.MemberIds.Contains(callerId)))
+        return Results.Forbid();
+
+    string? normalizedName = null;
+    if (!string.IsNullOrWhiteSpace(req.Name))
+    {
+        normalizedName = System.Text.RegularExpressions.Regex.Replace(
+            req.Name.ToLower().Replace(" ", "-"), @"[^a-z0-9\-]", "");
+        if (string.IsNullOrEmpty(normalizedName))
+            return Results.BadRequest(new { error = "Invalid room name." });
+        var existing = await rooms.GetByNameAsync(normalizedName);
+        if (existing is not null && existing.Id != id)
+            return Results.Conflict(new { error = "Channel name already exists." });
+    }
+
+    await rooms.UpdateAsync(id, normalizedName, req.Description);
+    var updated = await rooms.GetByIdAsync(id);
+    await hubCtx.Clients.Group(id).SendAsync("RoomUpdated",
+        new { roomId = id, name = updated?.Name, description = updated?.Description });
+    return Results.Ok(updated);
+}).RequireAuthorization();
+
+// Leave a private channel (caller is removed from MemberIds)
+app.MapDelete("/api/rooms/{id}/members/me", async (
+    string id,
+    IChatRoomRepository rooms,
+    ClaimsPrincipal principal) =>
+{
+    var room = await rooms.GetByIdAsync(id);
+    if (room is null) return Results.NotFound(new { error = "Room not found." });
+    if (!room.IsPrivate)
+        return Results.BadRequest(new { error = "Cannot leave a public channel." });
+    var callerId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
+    if (!room.MemberIds.Contains(callerId))
+        return Results.BadRequest(new { error = "You are not a member of this room." });
+    await rooms.RemoveMemberAsync(id, callerId);
+    return Results.NoContent();
+}).RequireAuthorization();
+
+// Get all members of a room (admin sees any; others need to be a member of private rooms)
+app.MapGet("/api/rooms/{id}/members", async (
+    string id,
+    IChatRoomRepository rooms,
+    IUserRepository users,
+    ClaimsPrincipal principal) =>
+{
+    var room = await rooms.GetByIdAsync(id);
+    if (room is null) return Results.NotFound(new { error = "Room not found." });
+    var callerId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
+    var role     = principal.FindFirstValue(ClaimTypes.Role);
+    if (room.IsPrivate && role != "admin" && !room.MemberIds.Contains(callerId))
+        return Results.Forbid();
+    var members = new List<object>();
+    foreach (var uid in room.MemberIds)
+    {
+        var u = await users.GetByIdAsync(uid);
+        if (u is not null)
+            members.Add(new { id = u.Id, username = u.Username,
+                displayName = u.DisplayName, avatarColor = u.AvatarColor,
+                avatarFileId = u.AvatarFileId });
+    }
+    return Results.Ok(members);
+}).RequireAuthorization();
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MESSAGES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -939,6 +1042,85 @@ app.MapPost("/api/rooms/{roomId}/messages/{msgId}/react", async (
         new { messageId = msgId, roomId, reactions = msg?.Reactions ?? [] });
 
     return Results.Ok();
+}).RequireAuthorization();
+
+// Search messages in a room by keyword (full-text)
+app.MapGet("/api/rooms/{roomId}/messages/search", async (
+    string roomId,
+    string? q,
+    int? limit,
+    IChatRoomRepository rooms,
+    IMessageRepository messages,
+    IUserRepository users,
+    ClaimsPrincipal principal) =>
+{
+    if (string.IsNullOrWhiteSpace(q) || q.Length < 2)
+        return Results.BadRequest(new { error = "Query must be at least 2 characters." });
+    if (q.Length > 100)
+        return Results.BadRequest(new { error = "Query must be 100 characters or fewer." });
+    var count = Math.Clamp(limit ?? 20, 1, 50);
+
+    if (roomId.StartsWith("dm_"))
+    {
+        var callerId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        var dmParts  = roomId[3..].Split('_');
+        if (dmParts.Length != 2 || !dmParts.Contains(callerId)) return Results.Forbid();
+        return Results.Ok(await EnrichMessages(await messages.SearchAsync(roomId, q, count), users));
+    }
+    var room = await rooms.GetByIdAsync(roomId);
+    if (room is null) return Results.NotFound();
+    if (room.IsPrivate)
+    {
+        var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        var role   = principal.FindFirstValue(ClaimTypes.Role);
+        if (role != "admin" && !room.MemberIds.Contains(userId)) return Results.Forbid();
+    }
+    return Results.Ok(await EnrichMessages(await messages.SearchAsync(roomId, q, count), users));
+}).RequireAuthorization();
+
+// Get all pinned messages for a room
+app.MapGet("/api/rooms/{roomId}/pinned", async (
+    string roomId,
+    IChatRoomRepository rooms,
+    IMessageRepository messages,
+    IUserRepository users,
+    ClaimsPrincipal principal) =>
+{
+    if (roomId.StartsWith("dm_")) return Results.Ok(Array.Empty<object>());
+    var room = await rooms.GetByIdAsync(roomId);
+    if (room is null) return Results.NotFound();
+    if (room.IsPrivate)
+    {
+        var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        var role   = principal.FindFirstValue(ClaimTypes.Role);
+        if (role != "admin" && !room.MemberIds.Contains(userId)) return Results.Forbid();
+    }
+    return Results.Ok(await EnrichMessages(await messages.GetPinnedByRoomAsync(roomId), users));
+}).RequireAuthorization();
+
+// Pin or unpin a message (admin for public rooms; admin or member for private rooms)
+app.MapPut("/api/rooms/{roomId}/messages/{msgId}/pin", async (
+    string roomId,
+    string msgId,
+    PinMessageRequest req,
+    IChatRoomRepository rooms,
+    IMessageRepository messages,
+    IHubContext<ChatHub> hubCtx,
+    ClaimsPrincipal principal) =>
+{
+    if (roomId.StartsWith("dm_"))
+        return Results.BadRequest(new { error = "Cannot pin messages in DMs." });
+    var room = await rooms.GetByIdAsync(roomId);
+    if (room is null) return Results.NotFound(new { error = "Room not found." });
+    var callerId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
+    var role     = principal.FindFirstValue(ClaimTypes.Role);
+    if (role != "admin" && !(room.IsPrivate && room.MemberIds.Contains(callerId)))
+        return Results.Forbid();
+    var ok = await messages.SetPinnedAsync(msgId, req.IsPinned);
+    if (!ok) return Results.NotFound(new { error = "Message not found." });
+    await hubCtx.Clients.Group(roomId).SendAsync("MessagePinned",
+        new { messageId = msgId, roomId, isPinned = req.IsPinned });
+    return Results.NoContent();
 }).RequireAuthorization();
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1297,7 +1479,8 @@ static async Task<List<object>> EnrichMessages(List<Message> msgs, IUserReposito
             attachmentId       = m.AttachmentId,
             attachmentName     = m.AttachmentName,
             attachmentType     = m.AttachmentType,
-            sentAt             = m.SentAt
+            sentAt             = m.SentAt,
+            isPinned           = m.IsPinned
         };
     }).ToList();
 }
