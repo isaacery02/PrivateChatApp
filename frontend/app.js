@@ -1495,7 +1495,15 @@ async function startRecording() {
   } catch { /* permissions API not available — fall through to getUserMedia */ }
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: 48000,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      }
+    });
     // Pick the best supported format
     const formats = [
       "audio/webm;codecs=opus", "audio/webm",
@@ -1503,7 +1511,7 @@ async function startRecording() {
       "audio/mp4"
     ];
     const mimeType = formats.find(f => MediaRecorder.isTypeSupported(f)) || "";
-    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType, audioBitsPerSecond: 64000 } : { audioBitsPerSecond: 64000 });
     audioChunks   = [];
     mediaRecorder.addEventListener("dataavailable", e => { if (e.data.size) audioChunks.push(e.data); });
     mediaRecorder.addEventListener("stop", () => {
