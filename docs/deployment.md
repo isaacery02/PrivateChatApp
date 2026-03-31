@@ -53,6 +53,7 @@ Rules:
 ## Step 2 — Build and start everything
 
 ```bash
+cd /mnt/user/appdata/dashboard-app/
 docker compose up --build -d
 ```
 
